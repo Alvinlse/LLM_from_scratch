@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 # coding all attension mechanism in the transformer architecture, 
@@ -76,17 +77,58 @@ class MultiHeadAttention(nn.Module):
         context_vector = (att_w @ value_vector).transpose(1,2).contiguous().view(batch, num_tokens, -1)
 
         return self.w_o(context_vector)
-        
 
-torch.manual_seed(123)
-dim_in = input.shape[-1] 
-dim_out = 2
-dropout = 0
-context_length = input.shape[1]
-num_heads = 3
-model = MultiHeadAttention(dim_in, dim_out, num_heads= num_heads, dropout= dropout,context_length=context_length)
-context_vector = model(input)
-print(context_vector)
+class TransformerBlock(nn.Module):
+    def __init__(self, dim_in, dim_out,num_heads, dropout=0.1 , context_length= 512 ):
+        super(TransformerBlock, self).__init__()
+        self.ln1 = nn.LayerNorm(dim_in)
+        self.attn = MultiHeadAttention(dim_in, dim_out, num_heads, dropout, context_length )
+        self.ln2 = nn.LayerNorm(dim_in)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim_in, 4 * dim_in),
+            nn.GELU(),
+            nn.Linear(4*dim_in, dim_in),
+            nn.Dropout(dropout)
+        )
+    
+    def forward(self,x):
+        x = x+self.attn(self.ln1(x))
+        x = x+self.mlp(self.ln2(x))
+        return x
+
+class GPT(nn.Module):
+    def __init__(self, vocab_size, dim_in, num_heads, num_layers, context_length, dropout=0.1):
+        super().__init__()
+        self.token_emb = nn.Embedding(vocab_size, dim_in)
+        self.pos_emb   = nn.Embedding(context_length, dim_in)
+        self.blocks    = nn.Sequential(*[
+            TransformerBlock(dim_in, dim_in, num_heads, dropout, context_length)
+            for _ in range(num_layers)
+        ])
+        self.ln_f  = nn.LayerNorm(dim_in)
+        self.head  = nn.Linear(dim_in, vocab_size, bias=False)
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+        pos = torch.arange(T, device=idx.device)
+
+        x = self.token_emb(idx) + self.pos_emb(pos)  # (B, T, d_model)
+        x = self.blocks(x)
+        x = self.ln_f(x)
+        logits = self.head(x)                        # (B, T, vocab_size)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+
+        return logits, loss
+
+
+
+
+
+        
+    
 
 
 
